@@ -6,9 +6,6 @@ import logging
 from datetime import datetime
 from dotenv import load_dotenv
 import json  # <-- Import json
-import re  # For cleaning the force name
-from pymongo import MongoClient  # For MongoDB connection
-
 
 # Import your existing modules
 from app.controllers.gpt_integration import improve_text, parse_to_sections
@@ -97,84 +94,73 @@ async def collect_poll_link(update, context):
 
 
 async def generate_report(update, context):
-    # Collect user input and metadata
     raw_text = context.user_data['raw_text']
     grades_data = context.user_data['grades_data']
-    date_str = datetime.now().strftime('%d/%m/%Y')
+    # Format the date as YYYY-MM-DD as requested
+    date_str = datetime.now().strftime('%Y-%m-%d')
 
-    manager_name = context.user_data.get('manager_name', "Training Manager")
-    force_name = context.user_data.get('force_name', "Training Force")
-    location = context.user_data.get('location', "Training Location")
-    youtube_link = context.user_data.get('youtube_link', None)
-    poll_link = context.user_data.get('poll_link', None)
+    manager_name = context.user_data.get('manager_name', "מנהל התרגיל")
+    force_name = context.user_data.get('force_name', "הכוח המתאמן")
+    location = context.user_data.get('location', "מיקום האימון")
+    youtube_link = context.user_data.get('youtube_link')
+    poll_link = context.user_data.get('poll_link')
 
     try:
-        # Format the force name for a valid primary key
-        cleaned_force_name = re.sub(r'\s+', '_', force_name.strip())
-        primary_key = f"{date_str}_{cleaned_force_name}"
-
-        # Enhance text using GPT and parse into sections
+        # Enhance text using GPT
         enhanced_text = improve_text(raw_text, date_str, manager_name, force_name, location)
+
+        # Parse the text into sections
         sections = parse_to_sections(enhanced_text)
 
-        # Prepare JSON data
+        # --------------------------------------------------------------------
+        # JSON Generation Code (NEW)
+        # We now have all the data needed to create the JSON file.
         json_data = {
-            "primary_key": primary_key,
-            "date": date_str,
             "force_name": force_name,
-            "gpt_output": {
-                "scenario_1": sections.get("Exercise 1", ""),
-                "scenario_2": sections.get("Exercise 2", "")
-            },
-            "grades": grades_data,
-            "poll_link": poll_link or "NONE",
-            "youtube_link": youtube_link or "NONE"
+            "manage_name": manager_name,  # The user asked for "manage_name" key.
+            "date": date_str,
+            "gpt_output": enhanced_text,  # Using the entire enhanced text as GPT output.
+            "grades": grades_data,        # This includes all collected grades.
+            "youtube_link": youtube_link if youtube_link else "",
+            "polls": poll_link if poll_link else ""
         }
 
-        # Upload JSON to MongoDB
-        mongo_uri = os.getenv("MONGO_URI")  # Ensure this exists in your .env file
-        client = MongoClient(mongo_uri)
-        db = client["Training_Reports"]  # Matches your MongoDB database name
-        collection = db["Training_Sessions"]  # Matches your collection name
-        result = collection.insert_one(json_data)
+        # Save the JSON to a file
+        json_file_path = "../resources/data.json"
+        with open(json_file_path, "w", encoding="utf-8") as f:
+            json.dump(json_data, f, ensure_ascii=False, indent=4)
 
-        # Confirm upload success
-        if result.inserted_id:
-            await update.message.reply_text(f"JSON successfully uploaded with ID: {result.inserted_id}")
-        else:
-            await update.message.reply_text("Failed to upload JSON to MongoDB.")
+        # (Optional) Send the JSON file to the user
+        with open(json_file_path, 'rb') as f:
+            await update.message.reply_document(document=f, filename="data.json")
+        # --------------------------------------------------------------------
 
-        # Save Word report locally
+
+        # Generate the document
         doc_output_path = "../resources/combat_report.docx"
         generate_word_document(
             sections,
             output_path=doc_output_path,
             date=date_str,
             signature=manager_name,
-            title="Training Report",
+            title="אימון בסימולטור DCA",
             grades_data=grades_data,
             youtube_link=youtube_link,
             poll_link=poll_link
         )
 
-        # Send Word report to user
+        # Send the document to the user
         with open(doc_output_path, 'rb') as doc:
             await update.message.reply_document(doc)
 
-        # Send JSON file to user
-        json_file_path = f"../resources/{primary_key}.json"  # Unique file per session
-        with open(json_file_path, "w", encoding="utf-8") as f:
-            json.dump(json_data, f, ensure_ascii=False, indent=4)
-
-        with open(json_file_path, 'rb') as json_file:
-            await update.message.reply_document(document=json_file)
-
-        await update.message.reply_text('The report was generated and sent successfully. Thank you!')
+        await update.message.reply_text('הדוח נוצר ונשלח אליכם.\n תודה שהשתמשתם בשירות שלנו!\n'
+                                        'נוצר על ידי Omri Rachmani')
     except Exception as e:
         logger.error(f"Error generating report: {e}")
-        await update.message.reply_text('An error occurred while generating the report. Please try again later.')
+        await update.message.reply_text('אירעה שגיאה ביצירת הדוח. אנא נסו שוב מאוחר יותר.')
 
     return ConversationHandler.END
+
 
 async def cancel(update, context):
     await update.message.reply_text('הפעולה בוטלה.')
